@@ -36,3 +36,9 @@ add_test(
     NAME huffman_compression_tests
     COMMAND huffman_tests
 )
+
+add_executable(huffman_benchmark
+    benchmarks/benchmark.cpp
+)
+
+target_link_libraries(huffman_benchmark PRIVATE huffman_core)
