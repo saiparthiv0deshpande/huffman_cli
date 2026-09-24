@@ -273,24 +273,24 @@ FileInfo getFileInfo(const std::string& inputPath) {
     }
 
     const HuffFile::Header header = HuffFile::readHeader(input);
+    const auto payloadStart = input.tellg();
+
+    if (payloadStart < 0) {
+        throw std::runtime_error("Invalid compressed file position");
+    }
 
     input.seekg(0, std::ios::end);
     const auto end = input.tellg();
 
-    if (end < 0) {
-        throw std::runtime_error("Cannot determine compressed file size");
+    if (end < payloadStart) {
+        throw std::runtime_error("Invalid compressed file size");
     }
 
-    const auto payloadStart = input.tellg();
+    const uint64_t expectedPayload =
+        payloadBytes(header.encodedBits);
 
-    input.clear();
-    input.seekg(0, std::ios::beg);
-    HuffFile::readHeader(input);
-    const auto actualPayloadStart = input.tellg();
-
-    const uint64_t expectedPayload = payloadBytes(header.encodedBits);
     const uint64_t actualPayload =
-        static_cast<uint64_t>(end - actualPayloadStart);
+        static_cast<uint64_t>(end - payloadStart);
 
     if (actualPayload != expectedPayload) {
         throw std::runtime_error(
