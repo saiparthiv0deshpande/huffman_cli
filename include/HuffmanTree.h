@@ -7,6 +7,8 @@
 #include <string>
 #include <unordered_map>
 
+class BitReader;
+
 class HuffmanTree {
 private:
     struct Node {
@@ -33,6 +35,8 @@ public:
     void build(const std::array<uint64_t, 256>& frequencies);
 
     const std::unordered_map<uint8_t, std::string>& getCodes() const;
+
+    bool decodeByte(BitReader& reader, uint8_t& byte) const;
 };
 
 #endif
