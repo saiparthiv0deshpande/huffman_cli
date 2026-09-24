@@ -1,6 +1,9 @@
 #include "HuffmanTree.h"
 
+#include "BitReader.h"
+
 #include <queue>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -85,4 +88,48 @@ void HuffmanTree::generateCodes(
 const std::unordered_map<uint8_t, std::string>&
 HuffmanTree::getCodes() const {
     return codes;
+}
+
+bool HuffmanTree::decodeByte(
+    BitReader& reader,
+    uint8_t& byte) const {
+
+    if (!root) {
+        return false;
+    }
+
+    auto node = root;
+
+    // A single-symbol tree still has one encoded bit per input byte.
+    if (node->isLeaf()) {
+        bool bit = false;
+        if (!reader.readBit(bit)) {
+            return false;
+        }
+
+        if (bit) {
+            throw std::runtime_error(
+                "Invalid bit in single-symbol Huffman stream");
+        }
+
+        byte = node->byte;
+        return true;
+    }
+
+    while (!node->isLeaf()) {
+        bool bit = false;
+        if (!reader.readBit(bit)) {
+            return false;
+        }
+
+        node = bit ? node->right : node->left;
+
+        if (!node) {
+            throw std::runtime_error(
+                "Invalid traversal in Huffman stream");
+        }
+    }
+
+    byte = node->byte;
+    return true;
 }
