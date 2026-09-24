@@ -1,24 +1,62 @@
-#include "HuffmanTree.h"
+#include "Compressor.h"
 
-#include <array>
+#include <exception>
+#include <iomanip>
 #include <iostream>
+#include <string>
 
-int main() {
-    std::array<uint64_t, 256> frequencies{};
+namespace {
 
-    frequencies['A'] = 5;
-    frequencies['B'] = 9;
-    frequencies['C'] = 12;
-    frequencies['D'] = 13;
-    frequencies['E'] = 16;
-    frequencies['F'] = 45;
+void printUsage() {
+    std::cout
+        << "Usage:\n"
+        << "  huff encode <input> <output>\n"
+        << "  huff decode <input> <output>\n";
+}
 
-    HuffmanTree tree;
-    tree.build(frequencies);
+} // namespace
 
-    for (const auto& [byte, code] : tree.getCodes()) {
-        std::cout << static_cast<char>(byte)
-                  << " -> " << code << '\n';
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        printUsage();
+        return 1;
+    }
+
+    const std::string command = argv[1];
+    const std::string input = argv[2];
+    const std::string output = argv[3];
+
+    try {
+        if (command == "encode") {
+            const auto stats = compressFile(input, output);
+
+            std::cout << "Encoded successfully.\n"
+                      << "Original size:   " << stats.originalSize
+                      << " bytes\n"
+                      << "Compressed size: " << stats.compressedSize
+                      << " bytes\n"
+                      << "Ratio:           "
+                      << std::fixed << std::setprecision(2)
+                      << stats.compressionRatio * 100.0
+                      << "%\n";
+        }
+        else if (command == "decode") {
+            const auto stats = decompressFile(input, output);
+
+            std::cout << "Decoded successfully.\n"
+                      << "Compressed size: " << stats.compressedSize
+                      << " bytes\n"
+                      << "Restored size:   " << stats.originalSize
+                      << " bytes\n";
+        }
+        else {
+            printUsage();
+            return 1;
+        }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "Error: " << ex.what() << '\n';
+        return 1;
     }
 
     return 0;
