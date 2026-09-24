@@ -60,7 +60,7 @@ CompressionStats compressFile(
 
     // Build the payload in memory first so the header can contain
     // the exact number of padding bits.
-    std::ostringstream payload(std::ios::binary);
+    std::ostringstream payload;
     BitWriter writer(payload);
 
     const auto& codes = tree.getCodes();
