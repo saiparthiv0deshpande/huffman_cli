@@ -7,6 +7,7 @@
 #include <fstream>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -126,6 +127,62 @@ void testRandomData(const fs::path& directory) {
     testRoundTrip(directory, "random", data);
 }
 
+void testCorruptedHeader(const fs::path& directory) {
+    const fs::path input = directory / "corrupt_input";
+    const fs::path compressed = directory / "corrupt.huff";
+    const fs::path restored = directory / "corrupt.output";
+
+    writeBytes(input, std::vector<uint8_t>(100, static_cast<uint8_t>('A')));
+    compressFile(input.string(), compressed.string());
+
+    auto data = readBytes(compressed);
+    assert(data.size() >= 5);
+    data[0] = 'X';
+    writeBytes(compressed, data);
+
+    bool rejected = false;
+
+    try {
+        decompressFile(compressed.string(), restored.string());
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+
+    assert(rejected);
+
+    fs::remove(input);
+    fs::remove(compressed);
+    fs::remove(restored);
+}
+
+void testTruncatedPayload(const fs::path& directory) {
+    const fs::path input = directory / "truncate_input";
+    const fs::path compressed = directory / "truncate.huff";
+    const fs::path restored = directory / "truncate.output";
+
+    writeBytes(input, std::vector<uint8_t>(1000, static_cast<uint8_t>('A')));
+    compressFile(input.string(), compressed.string());
+
+    auto data = readBytes(compressed);
+    assert(data.size() > 1);
+    data.pop_back();
+    writeBytes(compressed, data);
+
+    bool rejected = false;
+
+    try {
+        decompressFile(compressed.string(), restored.string());
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+
+    assert(rejected);
+
+    fs::remove(input);
+    fs::remove(compressed);
+    fs::remove(restored);
+}
+
 } // namespace
 
 int main() {
@@ -140,6 +197,8 @@ int main() {
     testTextFile(directory);
     testAllByteValues(directory);
     testRandomData(directory);
+    testCorruptedHeader(directory);
+    testTruncatedPayload(directory);
 
     fs::remove_all(directory);
 
