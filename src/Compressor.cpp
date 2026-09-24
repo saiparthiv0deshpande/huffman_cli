@@ -5,11 +5,11 @@
 #include "FileFormat.h"
 #include "HuffmanTree.h"
 
+#include <array>
 #include <fstream>
-#include <sstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 
 namespace {
 
@@ -29,6 +29,7 @@ std::array<uint64_t, 256> buildFrequencyTable(
     while (input.get(ch)) {
         const uint8_t byte =
             static_cast<uint8_t>(static_cast<unsigned char>(ch));
+
         ++frequencies[byte];
         ++fileSize;
     }
@@ -40,11 +41,52 @@ std::array<uint64_t, 256> buildFrequencyTable(
     return frequencies;
 }
 
+uint64_t calculateEncodedBits(
+    const std::array<uint64_t, 256>& frequencies,
+    const std::unordered_map<uint8_t, std::string>& codes) {
+
+    uint64_t encodedBits = 0;
+
+    for (const auto& [byte, frequency] : frequencies) {
+        if (frequency == 0) {
+            continue;
+        }
+
+        const auto it = codes.find(byte);
+        if (it == codes.end()) {
+            throw std::runtime_error(
+                "Internal error: missing Huffman code");
+        }
+
+        const uint64_t codeLength =
+            static_cast<uint64_t>(it->second.size());
+
+        if (frequency >
+            (std::numeric_limits<uint64_t>::max() - encodedBits) /
+                codeLength) {
+            throw std::runtime_error("Encoded bit count overflow");
+        }
+
+        encodedBits += frequency * codeLength;
+    }
+
+    return encodedBits;
+}
+
+uint64_t payloadBytes(uint64_t encodedBits) {
+    return encodedBits / 8 + (encodedBits % 8 != 0 ? 1 : 0);
+}
+
 } // namespace
 
 CompressionStats compressFile(
     const std::string& inputPath,
     const std::string& outputPath) {
+
+    if (inputPath == outputPath) {
+        throw std::runtime_error(
+            "Input and output paths must be different");
+    }
 
     uint64_t originalSize = 0;
     const auto frequencies =
@@ -53,54 +95,50 @@ CompressionStats compressFile(
     HuffmanTree tree;
     tree.build(frequencies);
 
+    const auto& codes = tree.getCodes();
+    const uint64_t encodedBits =
+        calculateEncodedBits(frequencies, codes);
+
+    HuffFile::Header header;
+    header.originalSize = originalSize;
+    header.encodedBits = encodedBits;
+    header.frequencies = frequencies;
+
     std::ifstream input(inputPath, std::ios::binary);
     if (!input) {
         throw std::runtime_error("Cannot reopen input file: " + inputPath);
     }
 
-    // Build the payload in memory first so the header can contain
-    // the exact number of padding bits.
-    std::ostringstream payload;
-    BitWriter writer(payload);
+    std::ofstream output(outputPath, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error(
+            "Cannot create output file: " + outputPath);
+    }
 
-    const auto& codes = tree.getCodes();
+    HuffFile::writeHeader(output, header);
+
+    BitWriter writer(output);
 
     char ch;
     while (input.get(ch)) {
         const uint8_t byte =
             static_cast<uint8_t>(static_cast<unsigned char>(ch));
 
-        auto it = codes.find(byte);
+        const auto it = codes.find(byte);
         if (it == codes.end()) {
-            throw std::runtime_error("Internal error: missing Huffman code");
+            throw std::runtime_error(
+                "Internal error: missing Huffman code");
         }
 
         writer.writeBits(it->second);
     }
 
-    const uint8_t paddingBits = writer.flush();
-
-    HuffFile::Header header;
-    header.originalSize = originalSize;
-    header.frequencies = frequencies;
-    header.paddingBits = paddingBits;
-
-    std::ofstream output(outputPath, std::ios::binary);
-    if (!output) {
-        throw std::runtime_error("Cannot create output file: " + outputPath);
-    }
-
-    HuffFile::writeHeader(output, header);
-
-    const std::string encoded = payload.str();
-    output.write(encoded.data(),
-                 static_cast<std::streamsize>(encoded.size()));
+    writer.flush();
+    output.flush();
 
     if (!output) {
         throw std::runtime_error("Failed to write compressed file");
     }
-
-    output.flush();
 
     CompressionStats stats;
     stats.originalSize = originalSize;
@@ -122,9 +160,15 @@ CompressionStats decompressFile(
     const std::string& inputPath,
     const std::string& outputPath) {
 
+    if (inputPath == outputPath) {
+        throw std::runtime_error(
+            "Input and output paths must be different");
+    }
+
     std::ifstream input(inputPath, std::ios::binary);
     if (!input) {
-        throw std::runtime_error("Cannot open compressed file: " + inputPath);
+        throw std::runtime_error(
+            "Cannot open compressed file: " + inputPath);
     }
 
     const HuffFile::Header header = HuffFile::readHeader(input);
@@ -132,62 +176,85 @@ CompressionStats decompressFile(
     HuffmanTree tree;
     tree.build(header.frequencies);
 
-    const auto& codes = tree.getCodes();
+    const uint64_t expectedPayloadBytes =
+        payloadBytes(header.encodedBits);
 
-    std::unordered_map<std::string, uint8_t> reverseCodes;
-    for (const auto& [byte, code] : codes) {
-        reverseCodes.emplace(code, byte);
+    const auto payloadStart = input.tellg();
+    if (payloadStart < 0) {
+        throw std::runtime_error("Invalid compressed file position");
     }
+
+    input.seekg(0, std::ios::end);
+    const auto fileEnd = input.tellg();
+    if (fileEnd < payloadStart ||
+        static_cast<uint64_t>(fileEnd - payloadStart) !=
+            expectedPayloadBytes) {
+        throw std::runtime_error(
+            "Compressed payload size does not match header");
+    }
+
+    input.seekg(payloadStart);
 
     std::ofstream output(outputPath, std::ios::binary);
     if (!output) {
-        throw std::runtime_error("Cannot create output file: " + outputPath);
+        throw std::runtime_error(
+            "Cannot create output file: " + outputPath);
     }
 
     if (header.originalSize == 0) {
-        return {0, 0, 0.0};
-    }
-
-    if (reverseCodes.empty()) {
-        throw std::runtime_error("Compressed file contains no Huffman codes");
+        return {0, static_cast<uint64_t>(fileEnd), 0.0};
     }
 
     BitReader reader(input);
-    std::string currentCode;
+
     uint64_t decodedBytes = 0;
-    bool bit = false;
 
-    while (decodedBytes < header.originalSize &&
-           reader.readBit(bit)) {
+    while (decodedBytes < header.originalSize) {
+        uint8_t byte = 0;
 
-        currentCode.push_back(bit ? '1' : '0');
-
-        auto it = reverseCodes.find(currentCode);
-        if (it != reverseCodes.end()) {
-            output.put(static_cast<char>(it->second));
-            if (!output) {
-                throw std::runtime_error("Failed to write decompressed file");
-            }
-
-            ++decodedBytes;
-            currentCode.clear();
+        if (!tree.decodeByte(reader, byte)) {
+            throw std::runtime_error(
+                "Compressed data is truncated");
         }
+
+        output.put(static_cast<char>(byte));
+        if (!output) {
+            throw std::runtime_error(
+                "Failed to write decompressed file");
+        }
+
+        ++decodedBytes;
     }
 
-    if (decodedBytes != header.originalSize || !currentCode.empty()) {
+    if (reader.bitsRead() != header.encodedBits) {
         throw std::runtime_error(
-            "Compressed data is truncated or corrupted");
+            "Encoded bit count does not match Huffman data");
+    }
+
+    // The remaining bits in the final payload byte must be zero padding.
+    bool paddingBit = false;
+    while (reader.bitsRead() < expectedPayloadBytes * 8ULL) {
+        if (!reader.readBit(paddingBit)) {
+            throw std::runtime_error(
+                "Compressed data is truncated");
+        }
+
+        if (paddingBit) {
+            throw std::runtime_error(
+                "Non-zero padding bits detected");
+        }
     }
 
     output.flush();
 
+    if (!output) {
+        throw std::runtime_error(
+            "Failed to finalize decompressed file");
+    }
+
     CompressionStats stats;
     stats.originalSize = header.originalSize;
-
-    input.seekg(0, std::ios::end);
-    const auto end = input.tellg();
-    stats.compressedSize =
-        end >= 0 ? static_cast<uint64_t>(end) : 0;
+    stats.compressedSize = static_cast<uint64_t>(fileEnd);
 
     if (stats.originalSize > 0) {
         stats.compressionRatio =
