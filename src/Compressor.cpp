@@ -10,6 +10,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -186,6 +187,7 @@ CompressionStats decompressFile(
 
     input.seekg(0, std::ios::end);
     const auto fileEnd = input.tellg();
+
     if (fileEnd < payloadStart ||
         static_cast<uint64_t>(fileEnd - payloadStart) !=
             expectedPayloadBytes) {
@@ -206,7 +208,6 @@ CompressionStats decompressFile(
     }
 
     BitReader reader(input);
-
     uint64_t decodedBytes = 0;
 
     while (decodedBytes < header.originalSize) {
@@ -231,7 +232,6 @@ CompressionStats decompressFile(
             "Encoded bit count does not match Huffman data");
     }
 
-    // The remaining bits in the final payload byte must be zero padding.
     bool paddingBit = false;
     while (reader.bitsRead() < expectedPayloadBytes * 8ULL) {
         if (!reader.readBit(paddingBit)) {
@@ -263,4 +263,51 @@ CompressionStats decompressFile(
     }
 
     return stats;
+}
+
+FileInfo getFileInfo(const std::string& inputPath) {
+    std::ifstream input(inputPath, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error(
+            "Cannot open compressed file: " + inputPath);
+    }
+
+    const HuffFile::Header header = HuffFile::readHeader(input);
+
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+
+    if (end < 0) {
+        throw std::runtime_error("Cannot determine compressed file size");
+    }
+
+    const auto payloadStart = input.tellg();
+
+    input.clear();
+    input.seekg(0, std::ios::beg);
+    HuffFile::readHeader(input);
+    const auto actualPayloadStart = input.tellg();
+
+    const uint64_t expectedPayload = payloadBytes(header.encodedBits);
+    const uint64_t actualPayload =
+        static_cast<uint64_t>(end - actualPayloadStart);
+
+    if (actualPayload != expectedPayload) {
+        throw std::runtime_error(
+            "Compressed payload size does not match header");
+    }
+
+    FileInfo info;
+    info.originalSize = header.originalSize;
+    info.compressedSize = static_cast<uint64_t>(end);
+    info.encodedBits = header.encodedBits;
+    info.uniqueSymbols = header.uniqueSymbols;
+
+    if (info.originalSize > 0) {
+        info.compressionRatio =
+            static_cast<double>(info.compressedSize) /
+            static_cast<double>(info.originalSize);
+    }
+
+    return info;
 }
